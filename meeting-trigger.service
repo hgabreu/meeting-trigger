@@ -1,0 +1,14 @@
+# Henrique
+
+[Unit]
+Description=Meeting-trigger daemon
+Requires=pulseaudio.socket
+After=pulseaudio.socket
+
+[Service]
+ExecStart=/usr/bin/meeting-trigger
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

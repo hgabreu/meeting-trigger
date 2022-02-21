@@ -1,0 +1,4 @@
+#makepkg dirs and output
+/src/
+/pkg/
+*.zst
