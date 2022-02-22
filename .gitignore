@@ -1,4 +1,12 @@
-#makepkg dirs and output
+# Arch
+# makepkg dirs and output
 /src/
 /pkg/
 *.zst
+
+# Ubuntu
+# checkinstall generated files
+backup*.tgz
+description-pak
+doc-pak/
+*.deb
