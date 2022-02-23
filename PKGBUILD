@@ -1,7 +1,7 @@
 # Maintainer: Henrique Abreu <hgabreu AT gmail.com>
 
 pkgname=meeting-trigger
-pkgver=0.0.1
+pkgver=1.0.0
 pkgrel=1
 pkgdesc="Monitor apps using the Mic (on pulseaudio) to trigger automations"
 arch=('any')

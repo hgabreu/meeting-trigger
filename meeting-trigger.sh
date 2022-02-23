@@ -4,105 +4,85 @@ set -o noclobber
 set -o errexit
 shopt -qs inherit_errexit
 
-declare -r VERSION=0.0.1-dev
+declare -r VERSION=1.0.0-dev
+declare -r CONFIG_FILE="${HOME}/.config/meeting-trigger/meeting-trigger.conf"
 
-# Prints the version string to STDOUT
-getVersion () {
-	echo -n "${VERSION}"
-}
+# New feature ideas list:
+# - add "sensitivity" option to trigger every time an app starts/stops reading the mic
+# - add "monitoredList" option to trigger only for certain apps (reverse logic of ignoreList)
 
-# isFunction command
-#
-# Returns with code 0 if the given command refers to a function
-# (and not, for example, to a shell builtin or an executable)
-isFunction () {
-	local command="$1"; shift
-	local commandType
+# Prints usage help info to STDOUT
+usage () {
+	echo "meeting-trigger $VERSION
 
-	! commandType="$(type -t "$command")" && return 1
-	! test "function" = "$commandType" && return 1
-	return 0
-}
+Usage:
+  meeting-trigger [-v]
+  meeting-trigger {-h --help}
+  meeting-trigger {-V --version}
+  meeting-trigger [-v] {ACTION} [parameters]
 
-# Returns the paths to all existing valid system-level configuration
-# files, in ascending order of priority
-#
-# The paths are returned in a newline-separated list
-getConfigurationFilesSystem () {
-	getConfigurationFiles "/usr/lib" "/etc" "/run"
-}
+Actions:
+  EditConfig [customEditor] [customEditorArgument]...
+  ListAppsUsingMic
+  Trigger {on off}
+  TestAndTrigger
 
-# Returns the paths to all existing valid user-level configuration
-# files, in ascending order of priority
-#
-# The paths are returned in a newline-separated list
-getConfigurationFilesUser () {
-	getConfigurationFiles ~/".config"
-}
+Options:
+  -v  enable DEBUG messages to STDERR
 
-# getConfigurationFiles baseDir [otherBaseDir...]
-#
-# Returns the paths to all existing valid configuration files, in
-# ascending order of priority, in the given directories
-#
-# The paths are returned in a newline-separated list
-# The directories must be given without trailing slash
-getConfigurationFiles () {
-	local suffix=".conf"
-	local pathPrefix
-	local configDir
-	local configFile
-	local baseDir
+meeting-trigger monitors a running PulseAudio server and checks for applications reading the mic.
+When a change in state is detected (mic-in-use <> not-in-use) then custom scripts are triggered.
 
-	while test $# -gt 0; do
-		baseDir="$1"; shift
-		pathPrefix="${baseDir}/meeting-trigger/meeting-trigger"
-		configDir="${pathPrefix}.d"
-		configFile="${pathPrefix}$suffix"
+Check your config (EditConfig action) to see (and adjust) the triggers scripts directory.
+Customize the sample trigger scripts (provided in that directory) to suit your needs.
 
-		if test -d "$configDir"; then
-			find "$configDir" -mindepth 1 -maxdepth 1 -type f -name "*$suffix" -print | sort
-		fi
-		if test -f "$configFile"; then
-			echo "$configFile"
-		fi
-	done
+Config file located at:
+  $CONFIG_FILE
+
+To enable meeting-trigger to run as a systemd service execute the following (no need for sudo):
+  systemctl --user enable meeting-trigger
+  systemctl --user start meeting-trigger
+"
 }
 
 # Prints an initial configuration file to STDOUT
 printTemplateConfigurationFile () {
-
 	echo '# Configuration file for meeting-trigger
 # ======================================================================
 
-# Created by meeting-trigger '$(getVersion)' 
+# Created by meeting-trigger '$VERSION'
 
-# Application names to ignore:
+# Application names to ignore (i.e. they use the mic, but you do not want to run the triggers for them):
 ignoreList=()
 #ignoreList+=("qemu-system-x86_64") #example of adding an application to the ignore list
+# Use the ListAppsUsingMic to check which apps are using your mic at the moment
 
 # Directory that holds scripts that will be called when the mic changes state (or following the forced trigger rules below)
+# Check this directory for sample scripts and customize them to your needs
 triggerDir="${HOME}/.config/meeting-trigger/scripts"
 
 # Sets whether to call triggers when monitoring first starts
 # Valid options are: on-only; off-only; both; none
-# Default is "both", which always makes an initial call setting "the external state"
+# Default is "on-only", which makes an initial trigger only if the mic is being used right at boot
 triggerInitialState="on-only"
 
 # How long the main loop should sleep before polling again
 pollingInterval="5s"
 
-# Polls count that the system must trigger (on or off) even if the mic state does not change
-# Default is 0, which disables this forced triggering. Use "1" to force a trigger for every poll;
-# Example, to force a trigger every 15min use: 15*60s/pollingInterval (say 5s) = 180
+# Polls count that the system must trigger (on or off) even if the mic state has not changed
+# Default is 0, which disables this forced triggering
+# Use "1" to force a trigger for every poll
+# To force a trigger every 15min, for example: 15*60sec/pollingInterval (say 5s) = 180
 forceTriggerInterval=0
 
 # Sets the forced trigger type (from above interval)
 # Valid options are: on-only; off-only; both
+# To disable it, set the interval above to 0
 forceTriggerType="both"
 
 # Whether to print DEBUG messages to STDERR
-verbose=false'
+verbose=false
+'
 }
 
 # Prints sample action script to STDOUT
@@ -110,18 +90,34 @@ printSampleScript () {
 	echo '#!/bin/bash
 
 # Sample meeting-trigger script action
-# $1 = [on|off]
 # Feel free to delete or change this for your own use
+# sample.sh {on off} [-v] [app1] [app2] ...
+
+# Check for -v flag and set internal verbose variable
+[ $# -gt 1 ] && [ "$2" = "-v" ] && verbose=true || verbose=false
+
+if $verbose; then
+	echo "Sample script running with arguments:"
+	for i in $(seq 1 $#); do
+		echo "\$$i='"'"'${!i}'"'"'"
+	done
+fi
 
 if [ "$1" = "on" ]; then
-        #trigger something when mic is on
-        echo "Mic is in use"
+	# do something when mic is on
+	echo -n "Mic is in use"
 
-else #assuming off
-  #... and something else when it is no longer in use
-        echo "Mic is NOT in use"
+	if $verbose && [ $# -gt 2 ]; then
+		shift 2
+		echo -n " by these apps: $@"
+	fi
+	echo
 
-fi'
+else # assuming off
+	# do something when mic is no longer in use
+	echo "Mic is NOT in use"
+fi
+'
 }
 
 # Prints sample ifttt.com script to STDOUT
@@ -129,9 +125,9 @@ printSampleIfttt () {
 	echo '#!/bin/bash
 
 # Sample Meeting-trigger ifttt.com webhook action call
+# ifttt.sh {on off} [-v] [app1] [app2] ...
 
-# Create your applets with a webhook trigger
-# And setup your markers events name ending with an "on" or "off" suffix
+# Create your applets with a webhook trigger and setup your markers events name ending with an "on" or "off" suffix
 # Example:
 # Create an webhook-triggered applet (no json) for the marker event: lights_on
 # Then another applet for the marker event: lights_off
@@ -144,44 +140,30 @@ webhook_key="put your key here"
 # Delete or comment the following line to "enable" this script action
 exit 0
 
-# Actual webhook call. Concatenating the event_basename with the on/off parameter this script receives from the daemon
-curl -s "https://maker.ifttt.com/trigger/${event_basename}$1/with/key/${webhook_key}" && echo'
+# Check verbose flag to redirect curl output
+[ $# -gt 1 ] && [ "$2" = "-v" ] && exec 3>&1 || exec 3>/dev/null
+
+# Actual webhook call. Concatenating the event_basename with the on/off parameter from the arguments
+curl -s "https://maker.ifttt.com/trigger/${event_basename}$1/with/key/${webhook_key}" >&3
+
+echo >&3 # adding a line-break because ifttt does not have one
+'
 }
 
-# Sources all existing configuration files, also re-populates the
-# $configFilesMonitored associative array
-loadSettingsFromConfigFiles () {
-	local -i exitCode
-	local configFile
-
+# Sources CONFIG_FILE
+loadSettingsFromConfigFile () {
 	reloadConfig=false
-
-	# Source the system-level configuration files
-	while read -rs configFile; do
-		echo " INFO  Sourcing configuration file \"$configFile\"" >&2
+	if [ -f "$CONFIG_FILE" ]; then
 		# shellcheck source=/dev/null
-		source -- "$configFile" && exitCode=$? || exitCode=$?
+		source -- "$CONFIG_FILE" && exitCode=$? || exitCode=$?
 		if test "$exitCode" -ne 0; then
-			echo "ERROR  Could not source configuration file \"$configFile\"" >&2
+			echo "ERROR  Could not source configuration file \"$CONFIG_FILE\"" >&2
 			exit "$exitCode"
 		fi
-	done < <(getConfigurationFilesSystem)
-
-	# Source the user-level configuration files (these are monitored for changes)
-	# Set all entries in the "monitored configuration files" map to "File not found"
-	for configFile in "${!configFilesMonitored[@]}"; do
-		configFilesMonitored["$configFile"]=""
-	done
-	while read -rs configFile; do
-		echo " INFO  Sourcing configuration file \"$configFile\"" >&2
-		# shellcheck source=/dev/null
-		source -- "$configFile" && exitCode=$? || exitCode=$?
-		if test "$exitCode" -ne 0; then
-			echo "ERROR  Could not source configuration file \"$configFile\"" >&2
-			exit "$exitCode"
-		fi
-		configFilesMonitored["$configFile"]="$(getFileStatus "$configFile")"
-	done < <(getConfigurationFilesUser)
+		configFilesMonitored["$CONFIG_FILE"]="$(getFileStatus "$CONFIG_FILE")"
+	else
+		echo " WARN  Config file not found \"$CONFIG_FILE\"" >&2
+	fi
 }
 
 # getFileStatus pathToFile
@@ -224,19 +206,53 @@ getFileModTimeSecsSinceEpoch () {
 
 # Validates settings
 validateSettings () {
-	if ! test "$verbose" = true && ! test "$verbose" = false; then
+	if ! [ -d "$triggerDir" ]; then
+		echo " WARN  \$triggerDir is not a valid directory: $triggerDir" >&2
+	fi
+
+	local s="$triggerInitialState"
+	if [ "$s" != "both" -a "$s" != "on-only" -a "$s" != "off-only" -a "$s" != "none" ]; then
+		echo " WARN  \$triggerInitialState must be one of: both; on-only; off-only; none, but was \"$s\", using \"on-only\" instead" >&2
+		triggerInitialState="on-only"
+	fi
+
+	# checking with sleep directly to see if it likes the pollingInterval
+	sleep "$pollingInterval" 2>/dev/null & sleepPid=$!
+	sleep 0 # yield, i.e. give the background job a chance to run
+	if ! [ -e /proc/$sleepPid ]; then # Has sleep already terminated?
+		if ! wait $sleepPid; then # so let's check if it indeed failed
+			echo " WARN  Invalid \$pollingInterval, see \"sleep --help\" for valid options. Was \"$pollingInterval\", using \"5s\" instead" >&2
+			pollingInterval="5s"
+		else # not failed but finished in a few milliseconds?
+			echo " WARN  \$pollingInterval is likely too small, are you sure \"$pollingInterval\" is correct?" >&2
+		fi
+	else # it looks like it worked
+		kill -s TERM "$sleepPid" 2>/dev/null || true
+	fi
+	sleepPid=""
+
+	if ! [ $forceTriggerInterval -ge 0 ] 2>/dev/null; then
+		echo " WARN  \$forceTriggerInterval must be a non-negative integer, was \"$forceTriggerInterval\", using \"0\" instead" >&2
+		forceTriggerInterval=0
+	fi
+
+	s="$forceTriggerType"
+	if [ "$s" != "both" -a "$s" != "on-only" -a "$s" != "off-only" ]; then
+		echo " WARN  \$forceTriggerType must be one of: both; on-only; off-only, but was \"$s\", using \"both\" instead" >&2
+		forceTriggerType="both"
+	fi
+
+	if [ "$verbose" != "true" -a "$verbose" != "false" ]; then
 		echo " WARN  \$verbose must be either \"true\" or \"false\", was \"$verbose\", using \"false\" instead" >&2
 		verbose=false
 	fi
-
-	# TODO code this
 }
 
 # (Re)loads the configuration and validates the resulting settings
 reloadConfig() {
 	reloadConfig=false
 	setDefaultSettings
-	loadSettingsFromConfigFiles
+	loadSettingsFromConfigFile
 	validateSettings
 }
 
@@ -411,6 +427,22 @@ writePidFile () {
 	echo "$pid" > "$path" 2> /dev/null
 }
 
+# Print apps' names using the mic to STDOUT
+listAppsUsingMic () {
+	pacmd list-source-outputs|grep 'application.name ='|cut -d'"' -f2
+}
+
+# Tests if appname provided as 1st argument is in ignoredList
+isAppIgnored () {
+	[[ ${ignoreList[*]} =~ (^|[[:space:]])"$1"($|[[:space:]]) ]]
+}
+
+# Print non ignored apps to STDOUT from list provided in STDIN
+filterNonIgnoredApps () {
+	while read -rs app; do
+		isAppIgnored "$app" || echo "$app"
+	done
+}
 
 # Special actions
 # ----------------------------------------------------------------------
@@ -420,7 +452,6 @@ writePidFile () {
 # Opens the primary configuration file in a text editor
 # Creates a new configuration file if it does not exist yet
 runActionEditConfig () {
-	local configFile=~/.config/meeting-trigger/meeting-trigger.conf
 	local editor
 
 	# Find the text editor executable
@@ -439,11 +470,11 @@ runActionEditConfig () {
 	fi
 
 	# Create a configuration file if it does not exist
-	if ! test -e "$configFile"; then
-		echo " INFO  Configuration file does not exist, creating it" >&2
+	if ! test -e "$CONFIG_FILE"; then
+		$verbose && echo "DEBUG  Configuration file does not exist, creating it" >&2
 		# Create the configuration file's parent directories if they do not exist
-		mkdir --parents "$(dirname "$configFile")/scripts"
-		printTemplateConfigurationFile > "$configFile"
+		mkdir --parents "$(dirname "$CONFIG_FILE")"
+		printTemplateConfigurationFile > "$CONFIG_FILE"
 		# Create scripts dir
 		mkdir --parents "$triggerDir"
 		printSampleScript > "${triggerDir}/sample.sh"
@@ -452,51 +483,64 @@ runActionEditConfig () {
 	fi
 
 	# Launch the text editor with the arguments and the configuration file's path
-	echo " INFO  Editing configuration file with \"$editor\": \"$configFile\"" >&2
-	$verbose && echo "DEBUG  Launching text editor: \"$editor\" $* \"$configFile\"" >&2
-	"$editor" "$@" "$configFile"
+	$verbose && echo "DEBUG  Launching text editor: \"$editor\" $* \"$CONFIG_FILE\"" >&2
+	"$editor" "$@" "$CONFIG_FILE"
 }
 
 # runActionTrigger on/off
 runActionTrigger () {
-	local verboseParam=""
-	if $verbose; then
-		echo "DEBUG  running triggers $1" >&2
-		verboseParam="-v"
+	if [ $# -eq 0 ] || [ "$1" != "on" -a "$1" != "off" ]; then
+		echo "ERROR  Bad Trigger argument, \$1 one must be 'on' or 'off'. Check usage" >&2
+		usage && exit 1
 	fi
-	run-parts $verboseParam --regex='.' -a "$1" -- "$triggerDir" >&2
+
+	local args=("--regex=.")
+	$verbose && args+=("-v" "--arg=$1" "--arg=-v") || args+=("--arg=$1")
+
+	shift;
+	for app in "$@"; do
+		args+=("--arg=$app")
+	done
+
+	$verbose && echo "DEBUG  run-parts ${args[@]} -- $triggerDir" >&2
+	run-parts "${args[@]}" -- "$triggerDir" >&2
 	forcedIntervalCounter=0
 }
 
-# Prints "on" if any (non-ignored) app is reading the mic, "off" otherwise
-runActionDetectMicState() {
-	$verbose && echo "DEBUG  detecting mic state" >&2
-	while read -rs app; do
-		if ! [[ ${ignoreList[*]} =~ (^|[[:space:]])"$app"($|[[:space:]]) ]]; then
-			echo -n "on"
-		return
-	fi
-	done < <( pacmd list-source-outputs|grep 'application.name ='|cut -d'"' -f2 )
-	echo -n "off"
+# Prints apps using the mic
+runActionListAppsUsingMic() {
+	$verbose && echo "DEBUG  Detecting mic state" >&2
+	local len=0
+	local apps=$(listAppsUsingMic)
+
+	for app in $apps; do
+		[ $len -lt ${#app} ] && len=${#app}
+	done
+	for app in $apps; do
+		printf "%-${len}s - %s\n" "$app" "$(isAppIgnored $app && echo on Ignore list || echo using mic)"
+	done
 }
 
 # Detects if state change and trigger actions accordingly
 runActionTestAndTrigger () {
-	$verbose && echo "DEBUG  running test and trigger" >&2
-	local newState="$(runActionDetectMicState)"
-	$verbose && echo "currentState=$currentState; newState=$newState" >&2
+	$verbose && echo "DEBUG  Running test and trigger" >&2
+	local apps=($(listAppsUsingMic | filterNonIgnoredApps))
+	local newState=$([ ${#apps[@]} -gt 0 ] && echo on || echo off)
+
+	$verbose && echo "DEBUG  currentState=$currentState; newState=$newState" >&2
 	if [ "$newState" != "$currentState" ]; then
 		currentState="$newState"
-		runActionTrigger "$currentState"
+		runActionTrigger "$currentState" "${apps[*]}"
+
 	elif [ $forceTriggerInterval -gt 0 ]; then
 		((forcedIntervalCounter++)) || true
 		if [ $forcedIntervalCounter -ge $forceTriggerInterval ]; then
 			if [ "$forceTriggerType" = "both" ] ||
-		  		[ "$forceTriggerType" = "on-only" -a "$currentState" = "on" ] ||
-				 "$forceTriggerType" = "off-only" -a "$currentState" = "off" ]; then
+				[ "$forceTriggerType" = "on-only" -a "$currentState" = "on" ] ||
+				[ "$forceTriggerType" = "off-only" -a "$currentState" = "off" ]; then
 
-				$verbose && echo "forcing trigger count $forcedIntervalCounter" >&2
-				runActionTrigger "$currentState"
+				$verbose && echo "DEBUG  Forcing trigger count $forcedIntervalCounter" >&2
+				runActionTrigger "$currentState" "${apps[@]}"
 			fi
 		fi
 	fi
@@ -548,14 +592,10 @@ unset allRequiredProgramsPresent
 # Global state variables
 # ----------------------------------------------------------------------
 
-# The user-level configuration files that are currently effective
-# Used to check whether they have been modified
-# Key is the file path, value is file size and modification time,
-# separated by a space
+# The config file(s) statuses to monitor for changes
 declare -A configFilesMonitored
-# Pre-load the map with the primary user-level configuration file, so
-# that it will be picked up if it is created during runtime
-configFilesMonitored[~/".config/meeting-trigger.conf"]=""
+# Pre-load main config file to be picked up if it's created after started
+configFilesMonitored["$CONFIG_FILE"]=""
 
 # PID of the main loop's sleep process
 sleepPid=""
@@ -577,85 +617,76 @@ currentState=""
 forcedIntervalCounter=0
 
 
-# Handler for special single argument "--help"
+# Handlers for special single arguments
 # ----------------------------------------------------------------------
 
-if test $# -eq 1 && test "$1" = "--help"; then
-	echo -n "meeting-trigger "; getVersion
-	echo -n \
-'Meeting-trigger daemon
-
-Usage:
-  meeting-trigger
-  meeting-trigger --help
-  meeting-trigger --version
-  meeting-trigger EditConfig [customEditor] [customEditorArgument]...
-  meeting-trigger DetectMicState
-  meeting-trigger Trigger [on|off]
-  meeting-trigger TestAndTrigger
-
-Monitors a running PulseAudio server instance and checks for applications reading the mic
-
-When a change in state is detected (meeting "started" or "ended") then the appropriate triggers are called
-'
-	exit 0
+if [ $# -eq 1 ]; then
+	if [ "$1" = "-h" -o "$1" = "--help" ]; then
+		usage && exit 0
+	elif [ "$1" = "-V" -o "$1" = "--version" ]; then
+		echo "$VERSION" && exit 0
+	fi
 fi
-
-
-# Handler for special single argument "--version"
-# ----------------------------------------------------------------------
-
-if test $# -eq 1 && test "$1" = "--version"; then
-	getVersion
-	exit 0
-fi
-
 
 # Apply/load and validate the settings
 # ----------------------------------------------------------------------
 
 reloadConfig
 # set initial currentState depending on config to trigger (or not) initially
-if test "$triggerInitialState" = "none"; then
-  currentState="$(runActionDetectMicState)"
-elif test "$triggerInitialState" = "on-only"; then
-  currentState="off"
-elif test "$triggerInitialState" = "off-only"; then
-  currentState="on"
+if [ "$triggerInitialState" = "none" ]; then
+	currentState="$(runActionDetectMicState)"
+elif [ "$triggerInitialState" = "on-only" ]; then
+	currentState="off"
+elif [ "$triggerInitialState" = "off-only" ]; then
+	currentState="on"
 else #assuming "both"
-  currentState="initial"
+	currentState="initial"
+fi
+
+# Handler for special option "-v", for verbose
+if [ $# -gt 0 ] && [ $1 = "-v" ]; then
+	verbose=true; shift
 fi
 
 # Print an overview
 # ----------------------------------------------------------------------
 
-echo -n " INFO  This is meeting-trigger " >&2; getVersion >&2
+echo " INFO  This is meeting-trigger $VERSION" >&2;
 $verbose && echo "DEBUG  Verbose output is enabled" >&2
 
 
 # Handle special action if present
 # ----------------------------------------------------------------------
 
-# Run a special action instead of the regular daemon if such an action
-# is given as first argument
-if test $# -gt 0; then
-	action="$1"; shift
-	actionFunction="runAction$action"
+# Returns with code 0 if the given command refers to a function
+# (and not, for example, to a shell builtin or an executable)
+isFunction () {
+	local command="$1"; shift
+	local commandType
 
+	! commandType="$(type -t "$command")" && return 1
+	! test "function" = "$commandType" && return 1
+	return 0
+}
+
+# Run a special action instead of the regular daemon if such an action is provided
+if [ $# -gt 0 ]; then
+	action="$1"; shift
+
+	if [ $# -gt 0 ] && [ "$1" = "-v" ]; then
+		verbose=true; shift
+	fi
+	currentState="manual" # Allows for manual exectution of TestAndTrigger to always trigger on/off
+
+	actionFunction="runAction$action"
 	if isFunction "$actionFunction"; then
 		$verbose && echo "DEBUG  Running action \"$action\" with $# argument(s)" >&2
-		"$actionFunction" "$@" && actionFunctionReturnCode="$?" || actionFunctionReturnCode="$?"
-		if test "$actionFunctionReturnCode" != 0 ; then
-			echo " WARN  Action \"$action\" returned with code $actionFunctionReturnCode" >&2
-		fi
-		exit "$actionFunctionReturnCode"
+		"$actionFunction" "$@" && returnCode="$?" || returnCode="$?"
+		[ "$returnCode" != 0 ] && echo " WARN  Action \"$action\" returned with code $returnCode" >&2
+		exit "$returnCode"
 	else
-		echo -n "ERROR  Unknown action \"$action\", must be one of:" >&2
-		# Print all available actions
-		while read -rs validAction; do
-			echo -n " \"$validAction\"" >&2
-		done < <(declare -F | sed -nre 's/^declare -f //;s/^runAction(.+)$/\1/p')
-		echo >&2
+		echo "ERROR  Unknown action \"$action\", see usage" >&2
+		usage
 		exit 1
 	fi
 fi
@@ -674,15 +705,11 @@ trap stop TERM INT QUIT HUP
 
 while ! $stopped; do
 	$verbose && echo "DEBUG  ---- Start of main loop iteration ----" >&2
+	isReloadRequired && reloadConfig
 
-	if isReloadRequired; then
-		reloadConfig
-	fi
 	runActionTestAndTrigger
 
-	if ! sleep "$pollingInterval" & sleepPid=$!; then
-		sleep "5s" & sleepPid=$!
-	fi
+	sleep "$pollingInterval" & sleepPid=$!
 	wait $sleepPid || true
 	sleepPid=""
 done
