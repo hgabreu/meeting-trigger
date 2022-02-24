@@ -3,7 +3,7 @@
 pkgname=meeting-trigger
 pkgver=1.0.0
 pkgrel=1
-pkgdesc="Monitor apps using the Mic (on pulseaudio) to trigger automations"
+pkgdesc="Monitor apps using the mic (on pulseaudio) to trigger automations"
 arch=('any')
 url="https://github.com/hgabreu/meeting-trigger"
 license=('GPL3')
