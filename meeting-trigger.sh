@@ -4,12 +4,16 @@ set -o noclobber
 set -o errexit
 shopt -qs inherit_errexit
 
-declare -r VERSION=1.0.0-dev
+declare -r VERSION=1.0.1-dev
 declare -r CONFIG_FILE="${HOME}/.config/meeting-trigger/meeting-trigger.conf"
 
 # New feature ideas list:
-# - add "sensitivity" option to trigger every time an app starts/stops reading the mic
-# - add "monitoredList" option to trigger only for certain apps (reverse logic of ignoreList)
+# - add "triggerType": "onMicState" (current behavior) vs "forEachApp" option to trigger every time an app starts/stops reading the mic
+# - add "monitoredList" option to trigger only for certain apps (inverse logic of ignoreList)
+# - remove sample scripts from within the main script and make them downloadable from github
+# - chat statuses idea:
+#	Teams: https://docs.microsoft.com/en-us/graph/api/presence-setpresence?view=graph-rest-beta&tabs=http
+#	Slack: https://api.slack.com/docs/presence-and-status
 
 # Prints usage help info to STDOUT
 usage () {
@@ -54,7 +58,7 @@ printTemplateConfigurationFile () {
 
 # Application names to ignore (i.e. they use the mic, but you do not want to run the triggers for them):
 ignoreList=()
-#ignoreList+=("qemu-system-x86_64") #example of adding an application to the ignore list
+ignoreList+=("PulseAudio Volume Control") # pavucontrol normally would trigger as reading the mic
 # Use the ListAppsUsingMic to check which apps are using your mic at the moment
 
 # Directory that holds scripts that will be called when the mic changes state (or following the forced trigger rules below)
@@ -429,12 +433,15 @@ writePidFile () {
 
 # Print apps' names using the mic to STDOUT
 listAppsUsingMic () {
-	pacmd list-source-outputs|grep 'application.name ='|cut -d'"' -f2
+	pacmd list-source-outputs|grep 'application.name ='|cut -d'"' -f2|sort|uniq
 }
 
 # Tests if appname provided as 1st argument is in ignoredList
 isAppIgnored () {
-	[[ ${ignoreList[*]} =~ (^|[[:space:]])"$1"($|[[:space:]]) ]]
+	for app in "${ignoreList[@]}"; do
+		[ "$app" = "$1" ] && return 0
+	done
+	return 1
 }
 
 # Print non ignored apps to STDOUT from list provided in STDIN
@@ -510,15 +517,16 @@ runActionTrigger () {
 # Prints apps using the mic
 runActionListAppsUsingMic() {
 	$verbose && echo "DEBUG  Detecting mic state" >&2
-	local len=0
 	local apps=$(listAppsUsingMic)
+	local len=$(wc -L <<<$apps) # get the longest line length, for a nice printf below
 
-	for app in $apps; do
-		[ $len -lt ${#app} ] && len=${#app}
-	done
-	for app in $apps; do
-		printf "%-${len}s - %s\n" "$app" "$(isAppIgnored $app && echo on Ignore list || echo using mic)"
-	done
+	if [ $len -gt 0 ]; then
+		while read -rs app; do
+			printf "%-${len}s - %s\n" "$app" "$(isAppIgnored "$app" && echo on Ignore list || echo using mic)"
+		done <<<"$apps"
+	else
+		echo "No apps were detected using the mic"
+	fi
 }
 
 # Detects if state change and trigger actions accordingly

@@ -10,3 +10,6 @@ backup*.tgz
 description-pak
 doc-pak/
 *.deb
+
+# vscode
+/.vscode/
